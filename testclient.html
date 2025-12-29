@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Socket.IO Group Chat Tester</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 800px; margin: 24px auto; padding: 0 12px; }
+    .row { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+    label { display: flex; gap: 6px; align-items: center; }
+    input { padding: 6px 8px; min-width: 280px; }
+    button { padding: 8px 12px; cursor: pointer; }
+    #log { border: 1px solid #ddd; height: 320px; overflow: auto; padding: 8px; background: #fafafa; }
+    .sys { color: #666; font-style: italic; }
+    .me { font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>Socket.IO Group Chat Tester</h1>
+
+  <div class="row">
+    <label>Server URL
+      <input id="serverUrl" value="http://3.79.62.150:5000" />
+    </label>
+    <!-- If you later add JWT handshake auth, uncomment and use this:
+    <label>JWT <input id="token" placeholder="Optional JWT for auth" /></label>
+    -->
+    <button id="connectBtn">Connect</button>
+  </div>
+
+  <div class="row">
+    <label>User ID <input id="userId" placeholder="your MongoDB user _id" /></label>
+    <label>Group ID <input id="groupId" placeholder="group _id (same for both)" /></label>
+    <button id="joinBtn">Join Room</button>
+  </div>
+
+  <div id="log"></div>
+
+  <div class="row">
+    <input id="text" placeholder="Type a message…" style="flex:1" />
+    <button id="sendBtn">Send</button>
+  </div>
+
+  <!-- Socket.IO client -->
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <script>
+    let socket;
+
+    const $ = (id) => document.getElementById(id);
+    const log = (msg, cls='') => {
+      const d = document.createElement('div');
+      d.textContent = msg;
+      if (cls) d.className = cls;
+      $('log').appendChild(d);
+      $('log').scrollTop = 1e9;
+    };
+
+    $('connectBtn').onclick = () => {
+      const url = $('serverUrl').value.trim();
+      if (!url) return alert('Enter server URL');
+
+      // If you later add JWT handshake auth:
+      // const token = $('token').value.trim();
+      // socket = io(url, { auth: token ? { token } : undefined });
+
+      socket = io(url, { transports: ['websocket'] }); // force WS to avoid polling issues through tunnels
+
+      socket.on('connect', () => log('🟢 connected ' + socket.id, 'sys'));
+      socket.on('connect_error', (e) => log('connect_error: ' + e.message, 'sys'));
+      socket.on('disconnect', (r) => log('🔴 disconnected: ' + r, 'sys'));
+
+      // Your server emits this event to the room
+      socket.on('receiveGroupMessage', (m) => {
+        const me = $('userId').value.trim();
+        const prefix = (m?.sentBy?._id || m?.sentBy || '') === me ? '[me]' : `[${m?.sentBy?.name || m?.sentBy}]`;
+        log(`${prefix} ${m?.message ?? ''}`, ((m?.sentBy?._id || m?.sentBy) === me) ? 'me' : '');
+      });
+    };
+
+    $('joinBtn').onclick = () => {
+      const groupId = $('groupId').value.trim();
+      const userId = $('userId').value.trim();
+      if (!socket || !socket.connected) return alert('Connect first');
+      if (!groupId || !userId) return alert('Enter groupId and userId');
+
+      socket.emit('joinRoom', { groupId, userId }, (res) => {
+        if (!res) return log('joinRoom: no ack (server code may not send one)', 'sys');
+        log(res.ok ? `joined group_${groupId}` : `join failed: ${res.error}`, 'sys');
+      });
+    };
+
+    $('sendBtn').onclick = () => {
+      const groupId = $('groupId').value.trim();
+      const sentBy = $('userId').value.trim();
+      const message = $('text').value.trim();
+      if (!socket || !socket.connected) return alert('Connect first');
+      if (!groupId || !sentBy) return alert('Enter groupId and userId');
+      if (!message) return;
+
+      // Your server supports either plain object or { body: JSON }
+      const payload = { groupId, sentBy, message };
+      socket.emit('sendGroupMessage', payload, (res) => {
+        if (!res) return; // your current server doesn't ack; if you add acks, this will show status
+        if (res.ok) log('[me] ' + (res.message?.message || message), 'me');
+        else log('send failed: ' + res.error, 'sys');
+      });
+
+      $('text').value = '';
+    };
+  </script>
+</body>
+</html>
